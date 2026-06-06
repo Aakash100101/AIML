@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 import numpy as np
 import os
-
+import plotly.express as px
 # -------------------- PAGE SETUP -------------------- #
 st.set_page_config(page_title="Heart Disease Predictor", layout="wide")
 
