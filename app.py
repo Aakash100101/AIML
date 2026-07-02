@@ -175,6 +175,104 @@ algonames = [
     'Support Vector Machine'
 ]
 
+# -------------------- SHARED UTILITIES & CACHED DATA LOADERS -------------------- #
+@st.cache_data
+def load_dataset():
+    """Loads and caches the heart disease dataset."""
+    csv_path = os.path.join(MODEL_DIR, 'heart.csv')
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Dataset not found at {csv_path}")
+    return pd.read_csv(csv_path)
+
+@st.cache_resource
+def load_models():
+    """Loads and caches all four models. Returns a dictionary mapping model names to objects."""
+    models = {}
+    for name, filepath in zip(algonames, modelnames):
+        try:
+            if not os.path.exists(filepath):
+                raise FileNotFoundError(f"Model file not found: {filepath}")
+            with open(filepath, 'rb') as f:
+                models[name] = pickle.load(f)
+        except Exception as e:
+            st.error(f"❌ Error loading model '{name}' from {filepath}: {e}")
+            models[name] = None
+    return models
+
+def preprocess_df(df):
+    """Encodes categorical columns in heart.csv to match model input conventions."""
+    encoded_df = df.copy()
+    
+    # Categorical variable mappings matching Tab 1 encoding
+    encoded_df['Sex'] = encoded_df['Sex'].map({'M': 0, 'F': 1})
+    encoded_df['ChestPainType'] = encoded_df['ChestPainType'].map({'TA': 0, 'ATA': 1, 'NAP': 2, 'ASY': 3})
+    encoded_df['RestingECG'] = encoded_df['RestingECG'].map({'Normal': 0, 'ST': 1, 'LVH': 2})
+    encoded_df['ExerciseAngina'] = encoded_df['ExerciseAngina'].map({'N': 0, 'Y': 1})
+    encoded_df['ST_Slope'] = encoded_df['ST_Slope'].map({'Up': 0, 'Flat': 1, 'Down': 2})
+    
+    # Rename columns to match input_data features in app.py
+    rename_dict = {
+        'Age': 'age',
+        'Sex': 'sex',
+        'ChestPainType': 'chest_pain_type',
+        'RestingBP': 'resting_bp',
+        'Cholesterol': 'cholesterol',
+        'FastingBS': 'fasting_blood_sugar',
+        'RestingECG': 'resting_ecg',
+        'MaxHR': 'max_heart_rate',
+        'ExerciseAngina': 'exercise_angina',
+        'Oldpeak': 'oldpeak',
+        'ST_Slope': 'st_slope'
+    }
+    encoded_df = encoded_df.rename(columns=rename_dict)
+    
+    feature_cols = [
+        'age', 'sex', 'chest_pain_type', 'resting_bp', 'cholesterol', 
+        'fasting_blood_sugar', 'resting_ecg', 'max_heart_rate', 
+        'exercise_angina', 'oldpeak', 'st_slope'
+    ]
+    return encoded_df[feature_cols]
+
+def calculate_model_metrics(df):
+    """Calculates classification metrics dynamically for all loaded models on the dataset."""
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+    
+    X = preprocess_df(df).values.astype(float)
+    y = df['HeartDisease'].values
+    
+    models = load_models()
+    metrics = {}
+    
+    for name in algonames:
+        model = models.get(name)
+        if model is None:
+            metrics[name] = None
+            continue
+            
+        try:
+            preds = model.predict(X)
+            
+            # Extract probability or decision value for ROC-AUC
+            if hasattr(model, 'predict_proba'):
+                probs = model.predict_proba(X)[:, 1]
+            elif hasattr(model, 'decision_function'):
+                probs = model.decision_function(X)
+            else:
+                probs = preds
+                
+            metrics[name] = {
+                'accuracy': accuracy_score(y, preds),
+                'precision': precision_score(y, preds),
+                'recall': recall_score(y, preds),
+                'f1_score': f1_score(y, preds),
+                'roc_auc': roc_auc_score(y, probs)
+            }
+        except Exception as e:
+            st.error(f"❌ Error calculating metrics for {name}: {e}")
+            metrics[name] = None
+            
+    return metrics
+
 # -------------------- TAB 1: SINGLE PREDICTION -------------------- #
 with tab1:
     # Hero Section with Animated Header
@@ -632,115 +730,165 @@ with tab2:
 
 # -------------------- TAB 3: MODEL INFORMATION (ENHANCED) -------------------- #
 with tab3:
-    st.header("📊 Model Performance & Information")
+    st.header("🔬 Explainable AI & Healthcare Analytics Dashboard")
+    st.markdown("Welcome to the advanced clinical analytics panel. Use the sections below to explore model metrics, dataset details, and interpret patient risk factors.")
     
-    # Model accuracies
-    data = {
-        'Decision Trees': 83.97, 
-        'Logistic Regression': 80.86, 
-        'Random Forest': 90.23, 
-        'Support Vector Machine': 84.22
-    }
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("Model Accuracy Comparison")
-        import plotly.express as px
-        import plotly.graph_objects as go
+    # Load dataset and calculate metrics
+    try:
+        df_heart = load_dataset()
+        computed_metrics = calculate_model_metrics(df_heart)
+    except Exception as e:
+        st.error(f"Error initializing data loader: {e}")
+        df_heart = None
+        computed_metrics = None
         
-        Models = list(data.keys())
-        Accuracies = list(data.values())
-        df = pd.DataFrame(list(zip(Models, Accuracies)), columns=['Models', 'Accuracies'])
+    sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
+        "📊 Model Performance",
+        "📈 Feature Importance",
+        "🗃 Dataset Insights",
+        "👤 Patient Risk & Explainability"
+    ])
+    
+    with sub_tab1:
+        st.subheader("🤖 Model Performance Leaderboard")
+        st.markdown("This dashboard evaluates each classifier dynamically on the clinical cohort dataset ([heart.csv](file:///c:/Users/Aakash/Desktop/heart/heart.csv)). Metrics are computed using predictions compared to the ground-truth target (`HeartDisease`).")
         
-        # Create bar chart with color gradient
-        fig = px.bar(df, y='Accuracies', x='Models', 
-                     color='Accuracies',
-                     color_continuous_scale='RdYlGn',
-                     title='Model Accuracy (%)')
-        fig.update_layout(height=400, showlegend=False)
-        fig.update_traces(text=df['Accuracies'], textposition='outside')
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        st.subheader("Best Model")
-        best_model = max(data, key=data.get)
-        best_accuracy = data[best_model]
-        st.metric("Model", best_model)
-        st.metric("Accuracy", f"{best_accuracy}%")
-        st.info("🏆 Highest performing model for heart disease prediction")
-    
-    st.markdown("---")
-    
-    # Model descriptions
-    st.subheader("📚 Model Descriptions")
-    
-    model_info = {
-        "Decision Trees": {
-            "description": "A tree-like model that makes decisions based on asking a series of questions about the features.",
-            "pros": "Easy to interpret, handles non-linear relationships",
-            "cons": "Prone to overfitting, can be unstable"
-        },
-        "Logistic Regression": {
-            "description": "A statistical model that uses a logistic function to model binary outcomes.",
-            "pros": "Fast, interpretable, works well with linear relationships",
-            "cons": "Assumes linear relationship between features"
-        },
-        "Random Forest": {
-            "description": "An ensemble of decision trees that combines multiple trees for better accuracy.",
-            "pros": "Reduces overfitting, handles non-linear data well",
-            "cons": "Less interpretable, computationally intensive"
-        },
-        "Support Vector Machine": {
-            "description": "Finds the optimal boundary between classes by maximizing the margin.",
-            "pros": "Effective in high dimensions, memory efficient",
-            "cons": "Sensitive to feature scaling, slower on large datasets"
-        }
-    }
-    
-    for model_name, info in model_info.items():
-        with st.expander(f"🔍 {model_name} - {data[model_name]}% Accuracy"):
-            st.write(f"**Description:** {info['description']}")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("**✅ Pros:**")
-                st.write(info['pros'])
-            with col2:
-                st.write("**⚠️ Cons:**")
-                st.write(info['cons'])
-    
-    st.markdown("---")
-    
-    # Feature importance section
-    st.subheader("📈 Key Features for Prediction")
-    st.markdown("""
-    The models analyze the following patient features to make predictions:
-    
-    1. **Age** - Patient's age in years
-    2. **Sex** - Biological sex (Male/Female)
-    3. **Chest Pain Type** - Type of chest pain experienced
-    4. **Resting Blood Pressure** - Blood pressure at rest (mm Hg)
-    5. **Cholesterol** - Serum cholesterol level (mg/dl)
-    6. **Fasting Blood Sugar** - Blood sugar level after fasting
-    7. **Resting ECG** - Electrocardiogram results at rest
-    8. **Max Heart Rate** - Maximum heart rate achieved during exercise
-    9. **Exercise Angina** - Chest pain induced by exercise
-    10. **Oldpeak** - ST depression induced by exercise
-    11. **ST Slope** - Slope of peak exercise ST segment
-    """)
-    
-    st.markdown("---")
-    
-    # Ensemble prediction explanation
-    st.subheader("🤝 Ensemble Prediction Method")
-    st.markdown("""
-    This application uses an **ensemble approach** combining all four models:
-    
-    - Each model makes an independent prediction
-    - **Majority voting** determines the final result
-    - If more than half of the models predict heart disease, the final prediction is positive
-    - This approach increases reliability and reduces false predictions
-    
-    **Example:** If 3 out of 4 models predict heart disease → Final prediction is **Heart Disease**
-    """)
+        if computed_metrics:
+            # Highlight best model
+            best_model_name = max(
+                computed_metrics.keys(),
+                key=lambda k: computed_metrics[k]['accuracy'] if computed_metrics[k] is not None else 0
+            )
+            best_metrics = computed_metrics[best_model_name]
+            best_accuracy_val = best_metrics['accuracy'] * 100
+            
+            # Calculate stats for metric cards
+            valid_metrics = [v for v in computed_metrics.values() if v is not None]
+            total_models = len(valid_metrics)
+            avg_accuracy_val = np.mean([v['accuracy'] for v in valid_metrics]) * 100
+            
+            # Top Metric Cards
+            st.markdown("#### Key Performance Indicators")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("🏆 Best Model", best_model_name)
+            col2.metric("🎯 Best Accuracy", f"{best_accuracy_val:.2f}%")
+            col3.metric("📊 Avg Accuracy", f"{avg_accuracy_val:.2f}%")
+            col4.metric("🤖 Total Models", total_models)
+            
+            st.success(f"🏆 **Best Performing Classifier:** **{best_model_name}** with **{best_accuracy_val:.2f}% Accuracy** and **{best_metrics['f1_score']*100:.2f}% F1 Score**.")
+            
+            # Build Leaderboard Table
+            st.markdown("#### Performance Comparison Leaderboard")
+            leaderboard_data = []
+            for name in algonames:
+                m = computed_metrics.get(name)
+                if m is not None:
+                    leaderboard_data.append({
+                        "Classifier": name,
+                        "Accuracy (%)": round(m['accuracy'] * 100, 2),
+                        "Precision (%)": round(m['precision'] * 100, 2),
+                        "Recall (%)": round(m['recall'] * 100, 2),
+                        "F1 Score (%)": round(m['f1_score'] * 100, 2),
+                        "ROC-AUC (%)": round(m['roc_auc'] * 100, 2)
+                    })
+            df_leaderboard = pd.DataFrame(leaderboard_data)
+            # Sort by accuracy
+            df_leaderboard = df_leaderboard.sort_values(by="Accuracy (%)", ascending=False)
+            
+            # Show table with style highlight
+            st.dataframe(
+                df_leaderboard.style.highlight_max(subset=["Accuracy (%)", "F1 Score (%)", "ROC-AUC (%)"], color="rgba(102, 126, 234, 0.2)"),
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Visualizations
+            st.markdown("#### Performance Visualizations")
+            col_chart1, col_chart2 = st.columns(2)
+            
+            with col_chart1:
+                # Plotly Grouped Bar Chart
+                chart_data = []
+                for name in algonames:
+                    m = computed_metrics.get(name)
+                    if m is not None:
+                        for k, v in m.items():
+                            chart_data.append({
+                                "Classifier": name,
+                                "Metric": k.replace("_", " ").title(),
+                                "Value (%)": round(v * 100, 2)
+                            })
+                df_chart = pd.DataFrame(chart_data)
+                
+                fig_bar = px.bar(
+                    df_chart,
+                    x="Metric",
+                    y="Value (%)",
+                    color="Classifier",
+                    barmode="group",
+                    color_discrete_sequence=px.colors.qualitative.Bold,
+                    title="Classifier Metric Comparison Matrix"
+                )
+                fig_bar.update_layout(
+                    yaxis_title="Value (%)",
+                    xaxis_title="Evaluation Metric",
+                    legend_title="Classifier",
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    height=450
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+                
+            with col_chart2:
+                # Plotly Radar Chart
+                import plotly.graph_objects as go
+                fig_radar = go.Figure()
+                categories = ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'ROC-AUC']
+                
+                for name in algonames:
+                    m = computed_metrics.get(name)
+                    if m is not None:
+                        values = [
+                            m['accuracy'] * 100,
+                            m['precision'] * 100,
+                            m['recall'] * 100,
+                            m['f1_score'] * 100,
+                            m['roc_auc'] * 100
+                        ]
+                        # Close the loop
+                        values.append(values[0])
+                        fig_radar.add_trace(go.Scatterpolar(
+                            r=values,
+                            theta=categories + [categories[0]],
+                            fill='toself',
+                            name=name
+                        ))
+                        
+                fig_radar.update_layout(
+                    polar=dict(
+                        radialaxis=dict(
+                            visible=True,
+                            range=[0, 100]
+                        )
+                    ),
+                    showlegend=True,
+                    title="Classifier Performance Radar Map",
+                    height=450,
+                    margin=dict(l=40, r=40, t=40, b=40)
+                )
+                st.plotly_chart(fig_radar, use_container_width=True)
+            
+        else:
+            st.warning("Unable to display model performance. Please verify dataset and model files.")
+            
+    with sub_tab2:
+        st.subheader("Feature Importance Analysis")
+        st.info("Placeholder for Random Forest global feature importance bar chart.")
+        
+    with sub_tab3:
+        st.subheader("Dataset Cohort Analytics")
+        st.info("Placeholder for heart.csv cohort distributions (age, sex, disease prevalence, cholesterol, correlation heatmap).")
+        
+    with sub_tab4:
+        st.subheader("Patient Clinical Interpretation")
+        st.info("Placeholder for ensemble consensus voting, dynamic risk score gauge, local explainability paths, and health reports.")
     
