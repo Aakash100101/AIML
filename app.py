@@ -881,12 +881,377 @@ with tab3:
             st.warning("Unable to display model performance. Please verify dataset and model files.")
             
     with sub_tab2:
-        st.subheader("Feature Importance Analysis")
-        st.info("Placeholder for Random Forest global feature importance bar chart.")
+        st.subheader("📈 Feature Importance Analysis")
+        st.markdown("This panel shows which clinical measurements contribute most to the **Random Forest** model's predictions. The importances are extracted directly from the trained ensemble of decision trees.")
+        
+        # Load the models dictionary
+        models = load_models()
+        rf_model = models.get('Random Forest')
+        
+        if rf_model is not None and hasattr(rf_model, 'feature_importances_'):
+            # Technical features list in correct training order
+            tech_features = [
+                'age', 'sex', 'chest_pain_type', 'resting_bp', 'cholesterol', 
+                'fasting_blood_sugar', 'resting_ecg', 'max_heart_rate', 
+                'exercise_angina', 'oldpeak', 'st_slope'
+            ]
+            
+            # User-friendly mapping
+            friendly_names = {
+                'age': 'Age',
+                'sex': 'Gender',
+                'chest_pain_type': 'Chest Pain Type',
+                'resting_bp': 'Resting Blood Pressure',
+                'cholesterol': 'Cholesterol',
+                'fasting_blood_sugar': 'Fasting Blood Sugar',
+                'resting_ecg': 'Resting ECG',
+                'max_heart_rate': 'Maximum Heart Rate',
+                'exercise_angina': 'Exercise-Induced Angina',
+                'oldpeak': 'ST Depression',
+                'st_slope': 'ST Segment Slope'
+            }
+            
+            importances = rf_model.feature_importances_
+            
+            # Create Feature Importance DataFrame
+            df_fi = pd.DataFrame({
+                'Technical Feature': tech_features,
+                'Feature Name': [friendly_names[f] for f in tech_features],
+                'Importance Score': importances,
+                'Percentage Contribution': importances * 100
+            })
+            
+            # Sort by importance descending
+            df_fi = df_fi.sort_values(by='Importance Score', ascending=False).reset_index(drop=True)
+            
+            # Verify sum to 1.0 (with safe precision)
+            sum_importance = float(np.sum(importances))
+            
+            # A) Top 5 Features Cards
+            st.markdown("#### 🔝 Top 5 Most Influential Clinical Features")
+            col_fi1, col_fi2, col_fi3, col_fi4, col_fi5 = st.columns(5)
+            cols = [col_fi1, col_fi2, col_fi3, col_fi4, col_fi5]
+            for idx in range(min(5, len(df_fi))):
+                row = df_fi.iloc[idx]
+                cols[idx].metric(
+                    label=f"#{idx+1}: {row['Feature Name']}",
+                    value=f"{row['Percentage Contribution']:.1f}%",
+                    help=f"Importance score: {row['Importance Score']:.4f}"
+                )
+                
+            st.markdown("---")
+            
+            col_vis1, col_vis2 = st.columns(2)
+            
+            with col_vis1:
+                # A) Interactive Plotly Horizontal Bar Chart
+                st.markdown("#### Feature Importance Ranking")
+                # Highlight top features (top 3 in pink/crimson, others in indigo)
+                colors = ['#f5576c' if i < 3 else '#667eea' for i in range(len(df_fi))]
+                
+                fig_fi = px.bar(
+                    df_fi,
+                    x='Percentage Contribution',
+                    y='Feature Name',
+                    orientation='h',
+                    title='Global Feature Importance Ranking (%)',
+                    labels={'Percentage Contribution': 'Contribution (%)', 'Feature Name': 'Clinical Feature'},
+                    text='Percentage Contribution'
+                )
+                fig_fi.update_traces(
+                    marker_color=colors,
+                    texttemplate='%{text:.1f}%',
+                    textposition='outside'
+                )
+                fig_fi.update_layout(
+                    yaxis={'categoryorder': 'total ascending'},
+                    margin=dict(l=20, r=40, t=40, b=20),
+                    height=450
+                )
+                st.plotly_chart(fig_fi, use_container_width=True)
+                
+            with col_vis2:
+                # C) Cumulative Importance Chart
+                st.markdown("#### Cumulative Feature Importance")
+                df_fi['Cumulative Contribution'] = df_fi['Percentage Contribution'].cumsum()
+                
+                fig_cum = px.line(
+                    df_fi,
+                    x=df_fi.index + 1,
+                    y='Cumulative Contribution',
+                    title='Cumulative Contribution of Features',
+                    labels={'x': 'Number of Features', 'Cumulative Contribution': 'Cumulative Contribution (%)'},
+                    markers=True
+                )
+                fig_cum.update_traces(line_color='#764ba2', marker=dict(size=8))
+                fig_cum.update_layout(
+                    yaxis_range=[0, 105],
+                    xaxis=dict(tickmode='linear', tick0=1, dtick=1),
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    height=450
+                )
+                st.plotly_chart(fig_cum, use_container_width=True)
+                
+            st.markdown("---")
+            
+            # D) Feature Importance Table
+            st.markdown("#### Detailed Feature Importance Metrics")
+            df_table = df_fi[['Feature Name', 'Importance Score', 'Percentage Contribution']].copy()
+            df_table['Importance Score'] = df_table['Importance Score'].map(lambda x: f"{x:.4f}")
+            df_table['Percentage Contribution'] = df_table['Percentage Contribution'].map(lambda x: f"{x:.2f}%")
+            
+            st.dataframe(df_table, use_container_width=True, hide_index=True)
+            
+            # 6. Medical Interpretation Panel & 7. Explainability Summary Card
+            col_exp1, col_exp2 = st.columns([1, 1])
+            
+            with col_exp1:
+                st.markdown("#### 🩺 Clinical Interpretation of Key Indicators")
+                with st.expander("ST Segment Slope", expanded=True):
+                    st.write("**ST Segment Slope:** Most influential indicator of heart disease risk. An abnormal slope pattern (such as Flat or Downsloping) indicates abnormal heart recovery dynamics under exertion.")
+                with st.expander("Maximum Heart Rate", expanded=True):
+                    st.write("**Maximum Heart Rate:** Lower maximum heart rate achieved during exercise is historically associated with higher cardiovascular risk due to impaired cardiac output capacity.")
+                with st.expander("Chest Pain Type", expanded=True):
+                    st.write("**Chest Pain Type:** A strong predictor of underlying abnormalities. Asymptomatic chest pain is highly correlated with ischemic heart events.")
+                with st.expander("ST Depression", expanded=True):
+                    st.write("**ST Depression (Oldpeak):** Measures exercise-induced cardiac stress. Larger depression values indicate greater local muscle strain and oxygen deficiency.")
+                with st.expander("Exercise-Induced Angina", expanded=True):
+                    st.write("**Exercise-Induced Angina:** A direct indicator of significant heart strain and insufficient blood supply to heart muscle during physical activity.")
+                    
+            with col_exp2:
+                st.markdown("#### 🧠 Explainability Summary")
+                st.info(
+                    f"**Explainability Summary:** The Random Forest model primarily relies on "
+                    f"**{df_fi.iloc[0]['Feature Name']}**, **{df_fi.iloc[1]['Feature Name']}**, "
+                    f"**{df_fi.iloc[2]['Feature Name']}**, **{df_fi.iloc[3]['Feature Name']}**, and "
+                    f"**{df_fi.iloc[4]['Feature Name']}** (representing the top 5 features) to classify a patient's risk of heart disease. "
+                    f"Together, these top 5 features account for **{df_fi.iloc[:5]['Percentage Contribution'].sum():.1f}%** of the model's total predictive influence. "
+                    f"This indicates that cardiac stress indicators and performance under physical activity carry the largest diagnostic weight in the model's logic."
+                )
+                
+                # Check sum of feature importances
+                st.caption(f"🔧 Model Check: Total feature importances sum = {sum_importance:.4f} (expected: 1.0000)")
+        else:
+            st.error("❌ The Random Forest model is not available or does not contain feature importances.")
         
     with sub_tab3:
-        st.subheader("Dataset Cohort Analytics")
-        st.info("Placeholder for heart.csv cohort distributions (age, sex, disease prevalence, cholesterol, correlation heatmap).")
+        st.subheader("🗃 Dataset Cohort Analytics")
+        st.markdown("This dashboard displays exploratory data analysis of the clinical cohort represented by the [heart.csv](file:///c:/Users/Aakash/Desktop/heart/heart.csv) dataset (918 patients). Use these charts to understand baseline distributions and cohort relationships.")
+        
+        if df_heart is not None:
+            # 1. Calculations for KPI Cards
+            total_patients = len(df_heart)
+            disease_cases = int(df_heart['HeartDisease'].sum())
+            healthy_cases = total_patients - disease_cases
+            disease_rate = (disease_cases / total_patients) * 100
+            avg_age = float(df_heart['Age'].mean())
+            avg_chol = float(df_heart['Cholesterol'].mean())
+            
+            # Create KPI Card Grid
+            st.markdown("#### Baseline Cohort Metrics")
+            col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
+            col_kpi1.metric("👥 Total Patients", f"{total_patients}")
+            col_kpi2.metric("❤️ Disease Cases", f"{disease_cases}", f"{disease_rate:.1f}% rate", delta_color="inverse")
+            col_kpi3.metric("✅ Healthy Cases", f"{healthy_cases}", f"{(100 - disease_rate):.1f}% rate")
+            col_kpi4.metric("👶 Avg Age", f"{avg_age:.1f} yrs")
+            col_kpi5.metric("🩸 Avg Cholesterol", f"{avg_chol:.1f} mg/dl")
+            
+            st.markdown("---")
+            
+            # Visualizations Layout
+            df_plot = df_heart.copy()
+            df_plot['HeartDisease_Label'] = df_plot['HeartDisease'].map({0: 'Healthy', 1: 'Heart Disease'})
+            
+            col_row1_1, col_row1_2 = st.columns(2)
+            
+            with col_row1_1:
+                # A) Disease Distribution Pie Chart
+                fig_pie = px.pie(
+                    df_plot, 
+                    names='HeartDisease_Label', 
+                    title='Heart Disease Cohort Prevalence (%)',
+                    color='HeartDisease_Label',
+                    color_discrete_map={'Healthy': '#51cf66', 'Heart Disease': '#ff6b6b'},
+                    hole=0.4
+                )
+                fig_pie.update_traces(textinfo='percent+label', textfont_size=14)
+                fig_pie.update_layout(margin=dict(l=20, r=20, t=40, b=20), height=400)
+                st.plotly_chart(fig_pie, use_container_width=True)
+                
+            with col_row1_2:
+                # B) Age Distribution Histogram
+                fig_age = px.histogram(
+                    df_plot, 
+                    x='Age', 
+                    color='HeartDisease_Label',
+                    barmode='overlay',
+                    title='Age Distribution by Heart Disease Cohort',
+                    color_discrete_map={'Healthy': '#51cf66', 'Heart Disease': '#ff6b6b'},
+                    opacity=0.75
+                )
+                fig_age.update_layout(
+                    xaxis_title='Age (years)', 
+                    yaxis_title='Patient Count',
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    height=400
+                )
+                st.plotly_chart(fig_age, use_container_width=True)
+                
+            col_row2_1, col_row2_2 = st.columns(2)
+            
+            with col_row2_1:
+                # C) Gender Distribution Stacked Bar Chart
+                df_gender = df_plot.groupby(['Sex', 'HeartDisease_Label']).size().reset_index(name='Count')
+                df_gender['Gender'] = df_gender['Sex'].map({'M': 'Male', 'F': 'Female'})
+                fig_gender = px.bar(
+                    df_gender, 
+                    x='Gender', 
+                    y='Count', 
+                    color='HeartDisease_Label',
+                    title='Gender Distribution by Heart Disease Status',
+                    color_discrete_map={'Healthy': '#51cf66', 'Heart Disease': '#ff6b6b'},
+                    labels={'HeartDisease_Label': 'Status'},
+                    barmode='stack'
+                )
+                fig_gender.update_layout(
+                    xaxis_title='Biological Sex', 
+                    yaxis_title='Patient Count',
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    height=400
+                )
+                st.plotly_chart(fig_gender, use_container_width=True)
+                
+            with col_row2_2:
+                # G) Age vs Max Heart Rate Scatter Plot
+                fig_scatter = px.scatter(
+                    df_plot, 
+                    x='Age', 
+                    y='MaxHR', 
+                    color='HeartDisease_Label',
+                    title='Age vs Maximum Heart Rate (MaxHR)',
+                    color_discrete_map={'Healthy': '#51cf66', 'Heart Disease': '#ff6b6b'},
+                    labels={'MaxHR': 'Maximum Heart Rate (bpm)', 'Age': 'Age (years)', 'HeartDisease_Label': 'Status'}
+                )
+                fig_scatter.update_layout(
+                    margin=dict(l=20, r=20, t=40, b=20), 
+                    height=400
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+                
+            st.markdown("---")
+            
+            col_row3_1, col_row3_2 = st.columns(2)
+            
+            with col_row3_1:
+                # D) Cholesterol Distribution Box Plot
+                fig_chol = px.box(
+                    df_plot, 
+                    x='HeartDisease_Label', 
+                    y='Cholesterol', 
+                    color='HeartDisease_Label',
+                    title='Serum Cholesterol Levels by Cohort',
+                    color_discrete_map={'Healthy': '#51cf66', 'Heart Disease': '#ff6b6b'},
+                    labels={'HeartDisease_Label': 'Cohort', 'Cholesterol': 'Serum Cholesterol (mg/dl)'}
+                )
+                fig_chol.update_layout(
+                    margin=dict(l=20, r=20, t=40, b=20), 
+                    height=400
+                )
+                st.plotly_chart(fig_chol, use_container_width=True)
+                
+            with col_row3_2:
+                # E) Resting Blood Pressure Distribution Box Plot
+                fig_bp = px.box(
+                    df_plot, 
+                    x='HeartDisease_Label', 
+                    y='RestingBP', 
+                    color='HeartDisease_Label',
+                    title='Resting Blood Pressure Levels by Cohort',
+                    color_discrete_map={'Healthy': '#51cf66', 'Heart Disease': '#ff6b6b'},
+                    labels={'HeartDisease_Label': 'Cohort', 'RestingBP': 'Resting Blood Pressure (mm Hg)'}
+                )
+                fig_bp.update_layout(
+                    margin=dict(l=20, r=20, t=40, b=20), 
+                    height=400
+                )
+                st.plotly_chart(fig_bp, use_container_width=True)
+                
+            st.markdown("---")
+            
+            # F) Correlation Heatmap
+            st.markdown("#### Clinical Correlation Heatmap")
+            st.markdown("This heatmap shows the Pearson correlation coefficients between encoded clinical attributes. Values close to +1.0 or -1.0 signify strong directional relationships.")
+            
+            df_numeric = preprocess_df(df_heart)
+            df_numeric['HeartDisease'] = df_heart['HeartDisease']
+            
+            friendly_labels = {
+                'age': 'Age',
+                'sex': 'Gender',
+                'chest_pain_type': 'Chest Pain Type',
+                'resting_bp': 'Resting Blood Pressure',
+                'cholesterol': 'Cholesterol',
+                'fasting_blood_sugar': 'Fasting Blood Sugar',
+                'resting_ecg': 'Resting ECG',
+                'max_heart_rate': 'Max Heart Rate',
+                'exercise_angina': 'Exercise Angina',
+                'oldpeak': 'ST Depression',
+                'st_slope': 'ST Slope',
+                'HeartDisease': 'Heart Disease (Target)'
+            }
+            df_corr = df_numeric.rename(columns=friendly_labels).corr()
+            
+            fig_corr = px.imshow(
+                df_corr,
+                text_auto='.2f',
+                color_continuous_scale='RdBu_r',
+                title='Pearson Correlation Coefficients (Full Cohort)',
+                aspect='auto'
+            )
+            fig_corr.update_layout(
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=500
+            )
+            st.plotly_chart(fig_corr, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Clinical Insights Panel
+            st.markdown("#### 🩺 Clinical Insights & Patient Cohort Summary")
+            
+            # Calculate dynamic figures for insights
+            male_sub = df_heart[df_heart['Sex'] == 'M']
+            female_sub = df_heart[df_heart['Sex'] == 'F']
+            male_disease_rate = (male_sub['HeartDisease'].sum() / len(male_sub)) * 100
+            female_disease_rate = (female_sub['HeartDisease'].sum() / len(female_sub)) * 100
+            
+            col_ins1, col_ins2 = st.columns(2)
+            
+            with col_ins1:
+                st.info(
+                    f"📊 **Disease Prevalence & Baseline**\n\n"
+                    f"- The dataset represents a cohort of **{total_patients} patients**.\n"
+                    f"- A total of **{disease_cases} patients ({disease_rate:.1f}%)** are positive for heart disease, "
+                    f"while **{healthy_cases} patients ({100-disease_rate:.1f}%)** are healthy.\n"
+                    f"- The average age of the cohort is **{avg_age:.1f} years**, with a standard deviation indicating concentration in the 50–65 age bracket, which represents the highest volume of positive cases."
+                )
+                st.warning(
+                    f"🧬 **High-Risk Demographic Grouping**\n\n"
+                    f"- **Gender Disparity**: Male patients represent a significantly high-risk group, with a heart disease rate of **{male_disease_rate:.1f}%** (out of {len(male_sub)} male patients) "
+                    f"compared to **{female_disease_rate:.1f}%** for female patients (out of {len(female_sub)} female patients).\n"
+                    f"- **Symptomatic Indicators**: Patients exhibiting Asymptomatic chest pain (ASY) present a significantly higher incidence rate of underlying coronary disease compared to patients with typical/atypical angina."
+                )
+                
+            with col_ins2:
+                st.success(
+                    f"📉 **Key Clinical Correlations**\n\n"
+                    f"- **ST Segment Slope**: Exhibits a very strong correlation with heart disease. A flat or downsloping ST segment post-exertion is a highly active indicator of disease state.\n"
+                    f"- **Maximum Heart Rate (MaxHR)**: Demonstrates a strong negative correlation. Lower heart rate ceilings during physical activity often point to arterial blockages or cardiovascular decay.\n"
+                    f"- **Exercise-Induced Angina & ST Depression**: Both parameters correlate strongly with the positive class, showing that exercise-induced cardiovascular strain correlates directly with ischemic pathology."
+                )
+                
+        else:
+            st.warning("Unable to display cohort metrics. Please verify heart.csv is present in the application folder.")
         
     with sub_tab4:
         st.subheader("Patient Clinical Interpretation")
