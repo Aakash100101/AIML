@@ -12,6 +12,7 @@ from utils.metrics import calculate_model_metrics
 from dashboards.model_dashboard import render_model_dashboard
 from dashboards.feature_importance import render_feature_importance
 from dashboards.dataset_analytics import render_dataset_analytics
+from dashboards.patient_dashboard import render_patient_dashboard
 # -------------------- PAGE SETUP -------------------- #
 st.set_page_config(page_title="Heart Disease Predictor", layout="wide")
 
@@ -655,6 +656,6 @@ with tab3:
         render_dataset_analytics(df_heart)
         
     with sub_tab4:
-        st.subheader("Patient Clinical Interpretation")
-        st.info("Placeholder for ensemble consensus voting, dynamic risk score gauge, local explainability paths, and health reports.")
+        models_dict = load_models()
+        render_patient_dashboard(input_data, models_dict, algonames)
     
