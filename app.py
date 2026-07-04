@@ -657,5 +657,5 @@ with tab3:
         
     with sub_tab4:
         models_dict = load_models()
-        render_patient_dashboard(input_data, models_dict, algonames)
+        render_patient_dashboard(input_data, models_dict, algonames, df_heart)
     
