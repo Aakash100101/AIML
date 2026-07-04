@@ -222,6 +222,8 @@ def generate_pdf_report(
     story.append(Spacer(1, 10))
     
     # Consensus text
+    neg_votes = total_votes - pos_votes
+    agreement_pct = (max(pos_votes, neg_votes) / total_votes) * 100 if total_votes > 0 else 0.0
     c_status = "POSITIVE" if pos_votes >= 3 else ("INCONCLUSIVE TIE" if pos_votes == 2 else "NEGATIVE")
     story.append(Paragraph(
         f"<b>Consensus Inference Decision Summary</b>: Collective vote score of <b>{pos_votes}/{total_votes} positive votes</b> "
