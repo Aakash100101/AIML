@@ -5,14 +5,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 
-def render_patient_dashboard(input_data, models, algonames, df_heart):
-    st.subheader("👤 Patient Inference & Custom Explainable AI (XAI) Panel")
-    st.markdown("This interactive console runs real-time predictions on the patient inputs selected in **Tab 1** and provides granular explainability pathways tracing individual model reasoning.")
+# Import PDF generator helper
+from utils.pdf_generator import generate_pdf_report
 
-    # 1. Setup Inference
+def render_patient_dashboard(input_data, models, algonames, df_heart):
+    # 1. Setup Inference inputs
     X = input_data.values.astype(float)
     
-    # Calculate predictions, probabilities and confidences for all models
+    # 2. Run model predictions, probabilities and confidences
     model_predictions = {}
     model_probabilities = {}
     model_confidences = {}
@@ -76,6 +76,184 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
         risk_category = "HIGH RISK"
         risk_color = "#ff6b6b"
         risk_desc = "Patient is in the high-risk range. Cardiological screening and diagnostics are strongly advised."
+
+    # 3. Patient Clinical variables extraction & warning thresholds
+    p_age = float(input_data['age'].values[0])
+    p_sex_num = int(input_data['sex'].values[0])
+    p_bp = float(input_data['resting_bp'].values[0])
+    p_chol = float(input_data['cholesterol'].values[0])
+    p_slope = int(input_data['st_slope'].values[0])
+    p_angina = int(input_data['exercise_angina'].values[0])
+    p_oldpeak = float(input_data['oldpeak'].values[0])
+    p_cp = int(input_data['chest_pain_type'].values[0])
+    
+    recs = []
+    warnings = []
+    
+    # Base Recommendations based on Risk Score
+    if risk_score <= 30.0:
+        recs.append("🏃 **Cardiovascular Wellness Routine:** Continue engaging in standard aerobic activity (minimum 150 minutes per week of moderate-intensity activity like brisk walking).")
+        recs.append("🥗 **Balanced Diet Maintenance:** Maintain low-sodium, nutrient-dense Mediterranean diet principles focusing on whole grains, leafy greens, and lean proteins.")
+        recs.append("🗓️ **Routine Screenings:** Conduct standard annual physical exams and baseline lipid profiling.")
+    elif risk_score <= 70.0:
+        recs.append("🩺 **Clinical Evaluation:** Schedule a follow-up assessment with a primary care practitioner to discuss sub-clinical risk profiles.")
+        recs.append("🔄 **Targeted Lifestyle Modifications:** Formulate a structured physical training and dietary regimen to reduce peripheral vascular resistance and manage blood lipids.")
+        recs.append("📊 **Home Monitoring:** Consider monitoring resting blood pressure weekly and tracking active heart rates during exercise.")
+    else:
+        recs.append("🚨 **Urgent Cardiologist Consult:** Arrange a consultation with a cardiologist to review this high-risk prediction cohort result.")
+        recs.append("⚡ **Cardiac Stress Testing:** Schedule a clinical graded exercise test (stress test) or echocardiogram to evaluate active myocardial perfusion.")
+        recs.append("📋 **Diagnostic Panel:** Plan for a high-sensitivity C-reactive protein (hs-CRP) and ambulatory ECG screening.")
+        recs.append("💊 **Pharmacotherapy Review:** Discuss risk-reduction pharmacotherapies (such as statins or anti-hypertensives) with a licensed physician.")
+
+    # Physiological overrides warnings
+    if p_bp > 140.0:
+        warnings.append(f"⚠️ **Hypertensive State Detected ({p_bp:.0f} mm Hg):** Patient BP exceeds the normal range. Reducing sodium intake, optimizing potassium intake, and monitoring pressure are indicated.")
+    if p_chol > 240.0:
+        warnings.append(f"⚠️ **Hypercholesterolemia Risk ({p_chol:.0f} mg/dl):** Highly elevated serum cholesterol. Diet modifications to limit saturated and trans fats are recommended.")
+    if p_slope == 1 or p_slope == 2:  # Flat or Downsloping
+        warnings.append("⚠️ **Ischemic Recovery Indicator:** The patient exhibits flat or downsloping post-exercise ST segments. This abnormal electrical recovery is a hallmark of myocardial oxygen deficit during strain.")
+    if p_angina == 1:
+        warnings.append("⚠️ **Active Anginal Symptom:** Patient experiences chest pain during physical exertion, pointing directly to a mismatch between cardiac oxygen supply and demand.")
+    if p_age > 65.0:
+        warnings.append(f"⚠️ **Age-Related Risk Factor ({p_age:.0f} yrs):** Advanced age increases vulnerability to coronary atherosclerosis. Diagnostic thresholds should be interpreted with clinical caution.")
+
+    # 4. Decision Tree Path Rules compilation
+    feature_names = [
+        'age', 'sex', 'chest_pain_type', 'resting_bp', 'cholesterol', 
+        'fasting_blood_sugar', 'resting_ecg', 'max_heart_rate', 
+        'exercise_angina', 'oldpeak', 'st_slope'
+    ]
+    friendly_names = {
+        'age': 'Age',
+        'sex': 'Gender',
+        'chest_pain_type': 'Chest Pain Type',
+        'resting_bp': 'Resting Blood Pressure',
+        'cholesterol': 'Serum Cholesterol',
+        'fasting_blood_sugar': 'Fasting Blood Sugar',
+        'resting_ecg': 'Resting ECG',
+        'max_heart_rate': 'Maximum Heart Rate',
+        'exercise_angina': 'Exercise-Induced Angina',
+        'oldpeak': 'ST Depression (Oldpeak)',
+        'st_slope': 'ST Segment Slope'
+    }
+    
+    rules = []
+    dt_model = models.get('Decision Trees')
+    if dt_model is not None:
+        try:
+            node_indicator = dt_model.decision_path(X)
+            node_index = node_indicator.indices[node_indicator.indptr[0]:node_indicator.indptr[1]]
+            tree = dt_model.tree_
+            for node_id in node_index:
+                if tree.children_left[node_id] == tree.children_right[node_id]:
+                    continue
+                f_idx = tree.feature[node_id]
+                threshold = tree.threshold[node_id]
+                f_name = feature_names[f_idx]
+                val = X[0, f_idx]
+                
+                if val <= threshold:
+                    sign = "<="
+                else:
+                    sign = ">"
+                    
+                med_name = friendly_names.get(f_name, f_name)
+                
+                if f_name == 'chest_pain_type':
+                    desc = "Chest Pain is Symptomatic (TA, ATA, or NAP)" if sign == "<=" else "Chest Pain is Asymptomatic (ASY - High Risk)"
+                elif f_name == 'st_slope':
+                    desc = "ST Slope is Upsloping (Normal)" if sign == "<=" else "ST Slope is Flat or Downsloping (Abnormal)"
+                elif f_name == 'exercise_angina':
+                    desc = "No Exercise-Induced Angina" if sign == "<=" else "Exercise-Induced Angina is Present (Abnormal)"
+                elif f_name == 'sex':
+                    desc = "Gender is Male" if sign == "<=" else "Gender is Female"
+                elif f_name == 'fasting_blood_sugar':
+                    desc = "Fasting Blood Sugar <= 120 mg/dl" if sign == "<=" else "Fasting Blood Sugar > 120 mg/dl (Elevated)"
+                else:
+                    desc = f"{med_name} {sign} {threshold:.1f} (Patient: {val:.1f})"
+                rules.append(desc)
+        except Exception as e:
+            st.error(f"Error compiling Decision Tree rules: {e}")
+
+    # 5. Logistic Regression contributions compilation
+    df_pos = None
+    df_neg = None
+    lr_model = models.get('Logistic Regression')
+    if lr_model is not None:
+        try:
+            coefs = lr_model.coef_[0]
+            features_raw = [
+                'age', 'sex', 'chest_pain_type', 'resting_bp', 'cholesterol', 
+                'fasting_blood_sugar', 'resting_ecg', 'max_heart_rate', 
+                'exercise_angina', 'oldpeak', 'st_slope'
+            ]
+            contributions = coefs * X[0]
+            df_contrib = pd.DataFrame({
+                "Feature": [friendly_names[f] for f in features_raw],
+                "Coefficient": coefs,
+                "Patient Value": X[0],
+                "Contribution": contributions
+            })
+            df_contrib = df_contrib.sort_values(by="Contribution", ascending=False)
+            df_pos = df_contrib[df_contrib["Contribution"] > 0]
+            df_neg = df_contrib[df_contrib["Contribution"] < 0]
+        except Exception as e:
+            st.error(f"Error compiling Logistic Regression contributions: {e}")
+
+    # 6. Patient Raw details dictionary for PDF layout
+    patient_raw_dict = {
+        'Age': f"{int(p_age)} years",
+        'Gender': "Male" if p_sex_num == 0 else "Female",
+        'Chest Pain Type': ["Typical Angina (TA)", "Atypical Angina (ATA)", "Non-Anginal Pain (NAP)", "Asymptomatic (ASY)"][p_cp],
+        'Resting Blood Pressure': f"{int(p_bp)} mm Hg",
+        'Serum Cholesterol': f"{int(p_chol)} mg/dl",
+        'Fasting Blood Sugar': "> 120 mg/dl" if int(input_data['fasting_blood_sugar'].values[0]) == 1 else "<= 120 mg/dl",
+        'Resting ECG': ["Normal", "ST wave abnormality (ST)", "Left Ventricular Hypertrophy (LVH)"][int(input_data['resting_ecg'].values[0])],
+        'Maximum Heart Rate': f"{int(input_data['max_heart_rate'].values[0])} bpm",
+        'Exercise-Induced Angina': "Yes" if p_angina == 1 else "No",
+        'ST Depression (Oldpeak)': f"{p_oldpeak:.1f} mm",
+        'ST Segment Slope': ["Upsloping (Up)", "Flat", "Downsloping (Down)"][p_slope]
+    }
+
+    # Compile the PDF report dynamically in-memory
+    try:
+        pdf_bytes = generate_pdf_report(
+            patient_raw_dict,
+            model_predictions,
+            model_probabilities,
+            model_confidences,
+            ensemble_label,
+            pos_votes,
+            total_votes,
+            risk_score,
+            risk_category,
+            risk_desc,
+            rules,
+            df_pos,
+            df_neg,
+            warnings,
+            recs,
+            warnings
+        )
+    except Exception as e:
+        st.error(f"Error generating PDF report bytes: {e}")
+        pdf_bytes = None
+
+    # LAYOUT GRID
+    col_header, col_download = st.columns([3, 1])
+    with col_header:
+        st.markdown("<h3 style='margin:0; padding:0;'>👤 Patient Inference & Custom Explainable AI (XAI) Panel</h3>", unsafe_allow_html=True)
+    with col_download:
+        if pdf_bytes is not None:
+            st.download_button(
+                label="📥 Download Clinical Report",
+                data=pdf_bytes,
+                file_name=f"Clinical_Heart_Disease_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        else:
+            st.warning("PDF compilation failed.")
 
     # RENDER SUBTABS
     xai_tab1, xai_tab2 = st.tabs([
@@ -263,149 +441,63 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
     # ==================== SUBTAB 2: EXPLAINABLE AI (XAI) ====================
     with xai_tab2:
         st.markdown("### 🔍 Model Explanations & Path Tracing")
-        st.markdown("This tab details the computational rules, feature importances, and demographics that justify the model's predictions.")
         
         # -------------------- SECTION A: DECISION TREE PATH EXPLAINER --------------------
         st.markdown("#### 🌳 Decision Tree Traced Path Explainer")
-        dt_model = models.get('Decision Trees')
-        if dt_model is not None:
-            try:
-                feature_names = [
-                    'age', 'sex', 'chest_pain_type', 'resting_bp', 'cholesterol', 
-                    'fasting_blood_sugar', 'resting_ecg', 'max_heart_rate', 
-                    'exercise_angina', 'oldpeak', 'st_slope'
-                ]
-                friendly_names = {
-                    'age': 'Age',
-                    'sex': 'Gender',
-                    'chest_pain_type': 'Chest Pain Type',
-                    'resting_bp': 'Resting Blood Pressure',
-                    'cholesterol': 'Serum Cholesterol',
-                    'fasting_blood_sugar': 'Fasting Blood Sugar',
-                    'resting_ecg': 'Resting ECG',
-                    'max_heart_rate': 'Maximum Heart Rate',
-                    'exercise_angina': 'Exercise-Induced Angina',
-                    'oldpeak': 'ST Depression (Oldpeak)',
-                    'st_slope': 'ST Segment Slope'
+        if dt_model is not None and len(rules) > 0:
+            st.write("Below is the exact step-by-step split path navigated by the patient's record through the Decision Tree nodes:")
+            st.markdown("""
+            <style>
+                .timeline-container {
+                    border-left: 3px solid #667eea;
+                    padding-left: 20px;
+                    margin-left: 10px;
+                    margin-top: 15px;
                 }
-                
-                # Retrieve nodes traversed
-                node_indicator = dt_model.decision_path(X)
-                node_index = node_indicator.indices[node_indicator.indptr[0]:node_indicator.indptr[1]]
-                tree = dt_model.tree_
-                
-                rules = []
-                for node_id in node_index:
-                    if tree.children_left[node_id] == tree.children_right[node_id]:
-                        continue # Skip leaf node
-                        
-                    f_idx = tree.feature[node_id]
-                    threshold = tree.threshold[node_id]
-                    f_name = feature_names[f_idx]
-                    val = X[0, f_idx]
-                    
-                    if val <= threshold:
-                        sign = "<="
-                    else:
-                        sign = ">"
-                        
-                    med_name = friendly_names.get(f_name, f_name)
-                    
-                    # Decoders for categorical inputs
-                    if f_name == 'chest_pain_type':
-                        desc = f"Chest Pain is Symptomatic (TA, ATA, or NAP)" if sign == "<=" else f"Chest Pain is Asymptomatic (ASY - High Risk)"
-                    elif f_name == 'st_slope':
-                        desc = f"ST Slope is Upsloping (Normal)" if sign == "<=" else f"ST Slope is Flat or Downsloping (Abnormal)"
-                    elif f_name == 'exercise_angina':
-                        desc = f"No Exercise-Induced Angina" if sign == "<=" else f"Exercise-Induced Angina is Present (Abnormal)"
-                    elif f_name == 'sex':
-                        desc = f"Gender is Male" if sign == "<=" else f"Gender is Female"
-                    elif f_name == 'fasting_blood_sugar':
-                        desc = f"Fasting Blood Sugar <= 120 mg/dl" if sign == "<=" else f"Fasting Blood Sugar > 120 mg/dl (Elevated)"
-                    else:
-                        desc = f"{med_name} {sign} {threshold:.1f} (Patient: {val:.1f})"
-                        
-                    rules.append(desc)
-                
-                # Render rules visual timeline
-                st.markdown("""
-                <style>
-                    .timeline-container {
-                        border-left: 3px solid #667eea;
-                        padding-left: 20px;
-                        margin-left: 10px;
-                        margin-top: 15px;
-                    }
-                    .timeline-node {
-                        position: relative;
-                        margin-bottom: 12px;
-                        padding: 10px;
-                        background: #f8f9fa;
-                        border-radius: 8px;
-                        border-left: 4px solid #748ffc;
-                    }
-                    .timeline-node::before {
-                        content: '';
-                        position: absolute;
-                        left: -27px;
-                        top: 15px;
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 50%;
-                        background: #667eea;
-                    }
-                </style>
+                .timeline-node {
+                    position: relative;
+                    margin-bottom: 12px;
+                    padding: 10px;
+                    background: #f8f9fa;
+                    border-radius: 8px;
+                    border-left: 4px solid #748ffc;
+                }
+                .timeline-node::before {
+                    content: '';
+                    position: absolute;
+                    left: -27px;
+                    top: 15px;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 50%;
+                    background: #667eea;
+                }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            st.markdown('<div class="timeline-container">', unsafe_allow_html=True)
+            for idx, r in enumerate(rules):
+                st.markdown(f"""
+                <div class="timeline-node">
+                    <small style="color:#777; font-weight:600;">Node #{idx+1} Split Criteria</small>
+                    <div style="font-size:14px; font-weight:500; color:#333;">{r}</div>
+                </div>
                 """, unsafe_allow_html=True)
-                
-                st.write("Below is the exact step-by-step split path navigated by the patient's record through the Decision Tree nodes:")
-                st.markdown('<div class="timeline-container">', unsafe_allow_html=True)
-                for idx, r in enumerate(rules):
-                    st.markdown(f"""
-                    <div class="timeline-node">
-                        <small style="color:#777; font-weight:600;">Node #{idx+1} Split Criteria</small>
-                        <div style="font-size:14px; font-weight:500; color:#333;">{r}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # Expander
-                with st.expander("🔬 Complete Diagnostic Path Logical Rules"):
-                    st.code("IF " + "\nAND ".join(rules) + f"\nTHEN Prediction = {'Heart Disease' if model_predictions['Decision Trees'] == 1 else 'Healthy'}", language="python")
-                    
-            except Exception as e:
-                st.error(f"Error compiling Decision Tree rules: {e}")
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            with st.expander("🔬 Complete Diagnostic Path Logical Rules"):
+                st.code("IF " + "\nAND ".join(rules) + f"\nTHEN Prediction = {'Heart Disease' if model_predictions['Decision Trees'] == 1 else 'Healthy'}", language="python")
         else:
-            st.warning("Decision Tree model not loaded. Skipping path tracing.")
+            st.warning("Decision Tree rules are not available.")
             
         st.markdown("---")
         
         # -------------------- SECTION B: LOGISTIC REGRESSION CONTRIBUTIONS --------------------
         st.markdown("#### ⚖️ Logistic Regression Feature Contributions")
-        lr_model = models.get('Logistic Regression')
-        if lr_model is not None:
+        if df_pos is not None and df_neg is not None:
             try:
-                coefs = lr_model.coef_[0]
-                features_raw = [
-                    'age', 'sex', 'chest_pain_type', 'resting_bp', 'cholesterol', 
-                    'fasting_blood_sugar', 'resting_ecg', 'max_heart_rate', 
-                    'exercise_angina', 'oldpeak', 'st_slope'
-                ]
-                
-                contributions = coefs * X[0]
-                
-                df_contrib = pd.DataFrame({
-                    "Feature": [friendly_names[f] for f in features_raw],
-                    "Coefficient": coefs,
-                    "Patient Value": X[0],
-                    "Contribution": contributions
-                })
-                
-                # Separate positive and negative contributions
-                df_contrib = df_contrib.sort_values(by="Contribution", ascending=False)
-                df_pos = df_contrib[df_contrib["Contribution"] > 0]
-                df_neg = df_contrib[df_contrib["Contribution"] < 0]
-                
                 # Plotly Bi-directional contribution bar chart
+                df_contrib = pd.concat([df_pos, df_neg]).sort_values(by="Contribution", ascending=False)
                 fig_contrib = px.bar(
                     df_contrib,
                     x="Contribution",
@@ -413,7 +505,7 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
                     orientation="h",
                     title="Directional Influence of Clinical Indicators",
                     color="Contribution",
-                    color_continuous_scale="RdYlGn_r", # Red represents higher risk, green lower
+                    color_continuous_scale="RdYlGn_r",
                     labels={"Contribution": "Influence on Risk Index", "Feature": "Clinical Indicator"}
                 )
                 fig_contrib.update_layout(
@@ -430,23 +522,17 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
                 
                 with col_c1:
                     st.markdown("<span style='color:#ff6b6b; font-weight:700;'>🔴 Risk Increasing Indicators (Positive Contribution)</span>", unsafe_allow_html=True)
-                    if not df_pos.empty:
-                        for _, row in df_pos.iterrows():
-                            st.write(f"- **{row['Feature']}**: +{row['Contribution']:.4f} (value: {row['Patient Value']:.1f})")
-                    else:
-                        st.caption("No indicators actively increased risk.")
+                    for _, row in df_pos.iterrows():
+                        st.write(f"- **{row['Feature']}**: +{row['Contribution']:.4f} (value: {row['Patient Value']:.1f})")
                         
                 with col_c2:
                     st.markdown("<span style='color:#51cf66; font-weight:700;'>🟢 Risk Decreasing Indicators (Negative Contribution)</span>", unsafe_allow_html=True)
-                    if not df_neg.empty:
-                        for _, row in df_neg.iterrows():
-                            st.write(f"- **{row['Feature']}**: {row['Contribution']:.4f} (value: {row['Patient Value']:.1f})")
-                    else:
-                        st.caption("No indicators actively decreased risk.")
+                    for _, row in df_neg.iterrows():
+                        st.write(f"- **{row['Feature']}**: {row['Contribution']:.4f} (value: {row['Patient Value']:.1f})")
             except Exception as e:
                 st.error(f"Error compiling Logistic Regression contributions: {e}")
         else:
-            st.warning("Logistic Regression model not loaded. Skipping contributions analysis.")
+            st.warning("Logistic Regression contributions are not available.")
             
         st.markdown("---")
         
@@ -454,7 +540,6 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
         st.markdown("#### 📊 Patient vs Cohort Demographics Comparison")
         if df_heart is not None:
             try:
-                # Filter cohorts
                 df_healthy = df_heart[df_heart['HeartDisease'] == 0]
                 df_disease = df_heart[df_heart['HeartDisease'] == 1]
                 
@@ -466,9 +551,6 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
                     ('Oldpeak', 'oldpeak', 'ST depression')
                 ]
                 
-                st.write("Compare the selected patient's active parameters to the averages of Healthy and Diseased patient groups in the study dataset:")
-                
-                # Render Cards Grid
                 col_co1, col_co2, col_co3, col_co4, col_co5 = st.columns(5)
                 cols_grid = [col_co1, col_co2, col_co3, col_co4, col_co5]
                 
@@ -478,8 +560,7 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
                     h_mean = float(df_healthy[orig_col].mean())
                     d_mean = float(df_disease[orig_col].mean())
                     
-                    # Compute relative status text
-                    if orig_col == 'MaxHR': # protective
+                    if orig_col == 'MaxHR':
                         if p_val < d_mean:
                             status_text = "Critical (Below Disease Avg)"
                             status_col = "#ff6b6b"
@@ -489,7 +570,7 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
                         else:
                             status_text = "Borderline/Intermediate"
                             status_col = "#fcc419"
-                    else: # risk factor
+                    else:
                         if p_val > d_mean:
                             status_text = "Elevated (Above Disease Avg)"
                             status_col = "#ff6b6b"
@@ -500,7 +581,6 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
                             status_text = "Borderline/Intermediate"
                             status_col = "#fcc419"
                             
-                    # Display card
                     cols_grid[idx].markdown(f"""
                     <div style="background-color:white; padding:12px; border-radius:10px; border:1px solid #eee; text-align:center; box-shadow: 0 4px 6px rgba(0,0,0,0.01); height:190px;">
                         <h6 style="margin:0 0 5px 0; color:#555; font-size:13px;">{orig_col}</h6>
@@ -517,7 +597,6 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
                         "Disease Average": round(d_mean, 1)
                     })
                 
-                # Plotly Grouped Comparison Bar Chart
                 df_comp = pd.DataFrame(comparison_data)
                 df_melt = df_comp.melt(id_vars="Metric", value_vars=["Patient", "Healthy Average", "Disease Average"], var_name="Group", value_name="Value")
                 
@@ -540,74 +619,58 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
             except Exception as e:
                 st.error(f"Error building cohort comparison: {e}")
         else:
-            st.warning("Baseline dataset heart.csv not loaded. Skipping cohort comparison.")
+            st.warning("Cohort metrics unavailable.")
             
         st.markdown("---")
         
         # -------------------- SECTION D: CLINICAL RISK FACTOR DETECTION --------------------
         st.markdown("#### 🔬 Automated Clinical Risk Factor Detection")
         
-        # Extract features
-        p_bp = float(input_data['resting_bp'].values[0])
-        p_chol = float(input_data['cholesterol'].values[0])
-        p_angina = int(input_data['exercise_angina'].values[0])
-        p_slope = int(input_data['st_slope'].values[0])
-        p_oldpeak = float(input_data['oldpeak'].values[0])
-        p_cp = int(input_data['chest_pain_type'].values[0])
-        
         detected_warnings = []
-        
-        # Checks
         if p_bp > 140.0:
             detected_warnings.append({
                 "factor": "Hypertension Detected",
                 "badge": "🔴 High Pressure",
                 "color": "#ff6b6b",
-                "explanation": f"Patient resting blood pressure is {p_bp:.0f} mm Hg (threshold > 140). Elevated pressure forces the ventricles to exert higher mechanical force to sustain output, accelerating vascular stiffness."
+                "explanation": f"Patient resting blood pressure is {p_bp:.0f} mm Hg (threshold > 140). Elevated pressure forces the ventricles to exert higher mechanical force to sustain output."
             })
-            
         if p_chol > 240.0:
             detected_warnings.append({
                 "factor": "Hypercholesterolemia Detected",
                 "badge": "🔴 Elevated Lipids",
                 "color": "#ff6b6b",
-                "explanation": f"Patient serum cholesterol level is {p_chol:.0f} mg/dl (threshold > 240). Elevated circulating lipids are associated with atherosclerotic plaque deposition in the coronary arteries."
+                "explanation": f"Patient serum cholesterol level is {p_chol:.0f} mg/dl (threshold > 240). Elevated circulating lipids are associated with atherosclerotic plaque deposition."
             })
-            
         if p_angina == 1:
             detected_warnings.append({
                 "factor": "Exercise-Induced Angina",
                 "badge": "🔴 Ischemic Pain",
                 "color": "#ff6b6b",
-                "explanation": "Active symptoms of chest discomfort during physical exertion suggest a mismatch between metabolic oxygen demand and arterial supply (reversible myocardial ischemia)."
+                "explanation": "Active symptoms of chest discomfort during physical exertion suggest a mismatch between metabolic oxygen demand and arterial supply."
             })
-            
         if p_slope == 1 or p_slope == 2:
             slope_name = "Flat" if p_slope == 1 else "Downsloping"
             detected_warnings.append({
                 "factor": f"Abnormal ST Segment Slope ({slope_name})",
                 "badge": "🔴 Abnormal Recovery",
                 "color": "#ff6b6b",
-                "explanation": "Traversing flat or downsloping ST segments post-exertion indicates incomplete electrical recovery of the myocardial tissue, representing a significant marker of coronary artery disease."
+                "explanation": "Traversing flat or downsloping ST segments post-exertion indicates incomplete electrical recovery of the myocardial tissue."
             })
-            
         if p_oldpeak > 1.5:
             detected_warnings.append({
                 "factor": f"Elevated ST Depression (Oldpeak: {p_oldpeak:.1f})",
                 "badge": "🔴 Severe Stress",
                 "color": "#ff6b6b",
-                "explanation": "An ST depression magnitude greater than 1.5 mm under cardiac stress indicates severe demand ischemia, pointing to a high probability of coronary obstruction."
+                "explanation": "An ST depression magnitude greater than 1.5 mm under cardiac stress indicates severe demand ischemia."
             })
-            
-        if p_cp == 3: # ASY
+        if p_cp == 3:
             detected_warnings.append({
                 "factor": "Asymptomatic Chest Pain Pattern",
                 "badge": "🔴 Silent Ischemia Risk",
                 "color": "#ff6b6b",
-                "explanation": "The patient reports Asymptomatic chest pain (ASY). Clinically, this is associated with a high prevalence of silent myocardial ischemia and unexpected cardiac events."
+                "explanation": "The patient reports Asymptomatic chest pain (ASY). Clinically, this is associated with a high prevalence of silent myocardial ischemia."
             })
             
-        # Render warnings
         if detected_warnings:
             col_w1, col_w2 = st.columns(2)
             for i, w in enumerate(detected_warnings):
@@ -622,30 +685,21 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
                 </div>
                 """, unsafe_allow_html=True)
         else:
-            st.success("✅ No cardiovascular clinical risk thresholds were exceeded. Continuous wellness maintenance advised.")
+            st.success("✅ No cardiovascular clinical risk thresholds were exceeded.")
             
         st.markdown("---")
         
         # -------------------- SECTION E: AI EXPLANATION SUMMARY --------------------
         st.markdown("#### 🧠 AI Clinical Explanation Synthesis")
-        
         top_drivers = []
-        if lr_model is not None:
-            try:
-                # Find top 3 positive contributors
-                pos_contrib = df_pos.head(3)
-                for _, row in pos_contrib.iterrows():
-                    top_drivers.append(row['Feature'])
-            except:
-                pass
-                
-        # Fallback to general high risk features if list is empty
-        if not top_drivers:
+        if df_pos is not None and not df_pos.empty:
+            pos_contrib = df_pos.head(3)
+            for _, row in pos_contrib.iterrows():
+                top_drivers.append(row['Feature'])
+        else:
             if p_slope in [1, 2]: top_drivers.append("ST Slope (Flat/Down)")
             if p_angina == 1: top_drivers.append("Exercise Angina")
             if p_cp == 3: top_drivers.append("Asymptomatic Pain Type")
-            if p_oldpeak > 1.5: top_drivers.append("ST Depression")
-            if p_bp > 140: top_drivers.append("Hypertension")
             
         drivers_str = "• " + "\n• ".join(top_drivers) if top_drivers else "• General age and clinical metrics"
         
@@ -675,7 +729,7 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
             st.warning("""
             **📋 Medium Risk Guidelines:**
             - **Recommendation**: Initiate targeted lifestyle modifications and periodic checkups.
-            - **Lifestyle**: Moderate dietary changes (Mediterranean principles, low trans fats), and engage in regular, monitored cardiovascular exercises.
+            - **Lifestyle**: Moderate dietary changes, and engage in regular, monitored cardiovascular exercises.
             - **Screening**: Semi-annual metabolic profiling and weekly resting blood pressure checks.
             """)
         else:
@@ -683,8 +737,26 @@ def render_patient_dashboard(input_data, models, algonames, df_heart):
             **🚨 Critical Care High Risk Guidelines:**
             - **Recommendation**: Immediate cardiologist referral and diagnostics are indicated.
             - **Diagnostics**: Graded treadmill stress test, echocardiogram, or computed tomography coronary angiography (CTCA).
-            - **Intervention**: Discuss lipid-lowering (statin) and antihypertensive pharmacotherapies with a physician.
-            - **Monitoring**: Continuous ECG tracking and immediate symptom alert response (calling emergency services if chest pain occurs).
+            - **Intervention**: Discuss lipid-lowering (statin) and antihypertensive pharmacotherapies.
+            - **Monitoring**: Continuous ECG tracking and immediate symptom alert response.
             """)
             
     st.info("**Explainable AI Disclosure:** This diagnostic path explainer is an educational research aid. It maps machine learning logic to medical terms but does not replace professional clinical decision making.")
+    
+    # Detailed Patient prediction matrix
+    st.markdown("---")
+    st.markdown("#### 📋 Detailed Patient Prediction Matrix")
+    matrix_data = []
+    for name in algonames:
+        p_label = "Heart Disease" if model_predictions[name] == 1 else "Healthy"
+        prob_val = model_probabilities[name]
+        conf_val = model_confidences[name] * 100
+        matrix_data.append({
+            "Classifier Model": name,
+            "Prediction": p_label,
+            "Positive Class Prob (Heart Disease)": f"{prob_val:.4f}",
+            "Consensus Vote Weight": "1.0",
+            "Inference Confidence": f"{conf_val:.2f}%"
+        })
+    df_matrix = pd.DataFrame(matrix_data)
+    st.dataframe(df_matrix, use_container_width=True, hide_index=True)
